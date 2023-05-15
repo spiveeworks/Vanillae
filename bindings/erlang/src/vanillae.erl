@@ -49,8 +49,7 @@
          acc_pending_txs/1,
          next_nonce/1,
          dry_run/1, dry_run/2, dry_run/3,
-         dry_run_result/3, dry_run_result/4, dry_run_result/5,
-         tx/1, tx_info/1, tx_result/3,
+         tx/1, tx_info/1,
          post_tx/1,
          contract/1, contract_code/1,
          contract_poi/1,
@@ -69,9 +68,11 @@
          contract_create/3,
          contract_create/8,
          prepare_contract/1,
+         aaci_lookup_spec/2,
          contract_call/5,
          contract_call/6,
          contract_call/10,
+         decode_bytearray_fate/1, decode_bytearray/2,
          verify_signature/3]).
 
 
@@ -600,65 +601,19 @@ dry_run(TX, Accounts, KBHash) ->
     JSON = zj:binary_encode(DryData),
     request("/v3/dry-run", JSON).
 
--spec dry_run_result(AACI, Fun, TX) -> {ok, Result} | {error, Reason}
-    when AACI     :: {aaci, string(), map(), map()}, % FIXME
-         Fun      :: string(),
-         TX       :: binary() | string(),
-         Result   :: term(),  % FIXME
-         Reason   :: term().  % FIXME
-
--spec dry_run_result(AACI, Fun, TX, Accounts) -> {ok, Result} | {error, Reason}
-    when AACI     :: {aaci, string(), map(), map()}, % FIXME
-         Fun      :: string(),
-         TX       :: binary() | string(),
-         Accounts :: [pubkey()],
-         Result   :: term(),  % FIXME
-         Reason   :: term().  % FIXME
-
--spec dry_run_result(AACI, Fun, TX, Accounts, KBHash) -> {ok, Result} | {error, Reason}
-    when AACI     :: {aaci, string(), map(), map()}, % FIXME
-         Fun      :: string(),
-         TX       :: binary() | string(),
-         Accounts :: [pubkey()],
-         KBHash   :: binary() | string(),
-         Result   :: term(),  % FIXME
-         Reason   :: term().  % FIXME
+-spec decode_bytearray_fate(EncodedStr) -> {ok, Result} | {error, Reason}
+    when EncodedStr :: binary() | string(),
+         Result     :: none | term(),
+         Reason     :: term().
 
 %% @doc
-%% Like dry_run/1, dry_run/2, dry_run/3 respectively, but the results are
-%% extracted, deserialized, and converted back into the format that is used for
-%% contract arguments in contract_call and contract_create. AACI and Fun are
-%% the AACI and function name that were passed into contract_call.
+%% Decode the "cb_XXXX" string that came out of a tx_info or dry_run, to
+%% the Erlang representation of FATE objects used by aeb_fate_encoding. See
+%% decode_bytearray/2 for an alternative that provides simpler outputs based on
+%% information provided by an AACI.
 
-dry_run_result({aaci, _, FunDefs, _}, Fun, TX) ->
-    case maps:find(Fun, FunDefs) of
-        {ok, {_ArgDef, ResultDef}} ->
-            Result = result(dry_run(TX)),
-            dry_run_convert_result(ResultDef, Result);
-        error -> {error, bad_fun_name}
-    end.
+decode_bytearray_fate(EncodedStr) ->
 
-dry_run_result({aaci, _, FunDefs, _}, Fun, TX, Accounts) ->
-    case maps:find(Fun, FunDefs) of
-        {ok, {_ArgDef, ResultDef}} ->
-            Result = result(dry_run(TX, Accounts)),
-            dry_run_convert_result(ResultDef, Result);
-        error -> {error, bad_fun_name}
-    end.
-
-dry_run_result({aaci, _, FunDefs, _}, Fun, TX, Accounts, KBHash) ->
-    case maps:find(Fun, FunDefs) of
-        {ok, {_ArgDef, ResultDef}} ->
-            Result = result(dry_run(TX, Accounts, KBHash)),
-            dry_run_convert_result(ResultDef, Result);
-        error -> {error, bad_fun_name}
-    end.
-
-dry_run_convert_result(ResultDef, {ok, Result}) ->
-    #{"results" := [#{"call_obj" := #{"return_value" := EncodedStr}}]} = Result,
-    decode_bytearray(ResultDef, EncodedStr).
-
-decode_bytearray(Type, EncodedStr) ->
     Encoded = unicode:characters_to_binary(EncodedStr),
     {contract_bytearray, Binary} = aeser_api_encoder:decode(Encoded),
     case Binary of
@@ -669,7 +624,26 @@ decode_bytearray(Type, EncodedStr) ->
             % the byte array. We could try and catch to at least return
             % *something* for cases that we don't already detect.
             Object = aeb_fate_encoding:deserialize(Binary),
-            coerce(Type, Object, from_fate)
+            {ok, Object}
+    end.
+
+-spec decode_bytearray(Type, EncodedStr) -> {ok, Result} | {error, Reason}
+    when Type       :: term(),
+         EncodedStr :: binary() | string(),
+         Result     :: none | term(),
+         Reason     :: term().
+
+%% @doc
+%% Decode the "cb_XXXX" string that came out of a tx_info or dry_run, to the
+%% same format used by contract_call/* and contract_create/*. The Type argument
+%% must be the result type of the same function in the same AACI that was used
+%% to create the transaction that EncodedStr came from.
+
+decode_bytearray(Type, EncodedStr) ->
+    case decode_bytearray_fate(EncodedStr) of
+        {ok, none} -> {ok, none};
+        {ok, Object} -> coerce(Type, Object, from_fate);
+        {error, Reason} -> {error, Reason}
     end.
 
 to_binary(S) when is_binary(S) -> S;
@@ -696,27 +670,6 @@ tx(ID) ->
 
 tx_info(ID) ->
     result(request(["/v3/transactions/", ID, "/info"])).
-
--spec tx_result(AACI, Fun, ID) -> {ok, Result} | {error, Reason}
-    when AACI   :: {aaci, string(), map(), map()}, % FIXME
-         Fun    :: string(),
-         ID     :: tx_hash(),
-         Result :: term(), % FIXME
-         Reason :: ae_error() | string().
-
-tx_result({aaci, _, FunDefs, _}, Fun, ID) ->
-    case maps:find(Fun, FunDefs) of
-        {ok, {_ArgDef, ResultDef}} ->
-            tx_result2(ResultDef, ID);
-        error -> {error, bad_fun_name}
-    end.
-
-tx_result2(ResultDef, ID) ->
-    case vanillae:tx_info(ID) of
-        {ok, #{"call_info" := #{"return_value" := Encoded}}} ->
-            decode_bytearray(ResultDef, Encoded);
-        {error, Reason} -> {error, Reason}
-    end.
 
 -spec post_tx(Data) -> {ok, Result} | {error, Reason}
     when Data   :: term(), % FIXME
@@ -1874,6 +1827,23 @@ zip_record_field({Name, Type}, {Remaining, Missing}) ->
            {ZippedTerm, {RemainingAfter, Missing}};
         error ->
            {missing, {Remaining, [Name | Missing]}}
+    end.
+
+-spec aaci_lookup_spec(AACI, Fun) -> {ok, Type} | {error, Reason}
+    when AACI   :: {aaci, term(), term(), term()}, % FIXME
+         Fun    :: binary() | string(),
+         Type   :: {term(), term()}, % FIXME
+         Reason :: bad_fun_name.
+
+%% @doc
+%% Look up the type information of a given function, in the AACI provided by
+%% prepare_contract/1. This type information, particularly the return type, is
+%% useful for calling decode_bytearray/2.
+
+aaci_lookup_spec({aaci, _, FunDefs, _}, Fun) ->
+    case maps:find(Fun, FunDefs) of
+        A = {ok, _} -> A;
+        error       -> {error, bad_fun_name}
     end.
 
 -spec min_gas_price() -> integer().
