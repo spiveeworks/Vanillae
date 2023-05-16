@@ -1278,8 +1278,7 @@ prepare_contract(File) ->
 prepare_aaci(ACI) ->
     % NOTE this will also pick up the main contract; as a result the main
     % contract extraction later on shouldn't bother with typedefs.
-    Contracts = [{N, T} || #{contract := #{name := N,
-                                           typedefs := T}} <- ACI],
+    Contracts = [ContractDef || #{contract := ContractDef} <- ACI],
     Types = simplify_contract_types(Contracts, #{}),
 
     [{NameBin, SpecDefs}] =
@@ -1292,11 +1291,20 @@ prepare_aaci(ACI) ->
     {aaci, Name, Specs, Types}.
 
 simplify_contract_types([], Types) -> Types;
-simplify_contract_types([{NameBin, TypeDefs} | Rest], Types) ->
+simplify_contract_types([Next | Rest], Types) ->
+    TypeDefs = maps:get(typedefs, Next),
+    NameBin = maps:get(name, Next),
     Name = binary_to_list(NameBin),
     Types2 = maps:put(Name, {[], contract}, Types),
-    Types3 = simplify_typedefs(TypeDefs, Types2, Name ++ "."),
-    simplify_contract_types(Rest, Types3).
+    Types3 = case maps:find(state, Next) of
+                 {ok, StateDefACI} ->
+                     StateDefOpaque = opaque_type([], StateDefACI),
+                     maps:put(Name ++ ".state", {[], StateDefOpaque}, Types2);
+                 error ->
+                     Types2
+             end,
+    Types4 = simplify_typedefs(TypeDefs, Types3, Name ++ "."),
+    simplify_contract_types(Rest, Types4).
 
 simplify_typedefs([], Types, _NamePrefix) -> Types;
 simplify_typedefs([Next | Rest], Types, NamePrefix) ->
