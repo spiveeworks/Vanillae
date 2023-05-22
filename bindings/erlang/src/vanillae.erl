@@ -613,7 +613,6 @@ dry_run(TX, Accounts, KBHash) ->
 %% information provided by an AACI.
 
 decode_bytearray_fate(EncodedStr) ->
-
     Encoded = unicode:characters_to_binary(EncodedStr),
     {contract_bytearray, Binary} = aeser_api_encoder:decode(Encoded),
     case Binary of
@@ -1663,9 +1662,12 @@ coerce({_, _, {list, [Type]}}, Data, Direction) when is_list(Data) ->
     coerce_list(Type, Data, Direction, []);
 coerce({_, _, {map, [KeyType, ValType]}}, Data, Direction) when is_map(Data) ->
     coerce_map(KeyType, ValType, maps:iterator(Data), Direction, #{});
-coerce({O, N, {tuple, ElementTypes}}, Data, Direction) when is_tuple(Data) ->
+coerce({O, N, {tuple, ElementTypes}}, Data, to_fate) when is_tuple(Data) ->
     ElementList = tuple_to_list(Data),
-    coerce_tuple(O, N, ElementTypes, ElementList, Direction);
+    coerce_tuple(O, N, ElementTypes, ElementList, to_fate);
+coerce({O, N, {tuple, ElementTypes}}, {tuple, Data}, from_fate) ->
+    ElementList = tuple_to_list(Data),
+    coerce_tuple(O, N, ElementTypes, ElementList, from_fate);
 coerce({O, N, {variant, Variants}}, Data, to_fate) when is_tuple(Data), tuple_size(Data) > 0 ->
     [Name | Terms] = tuple_to_list(Data),
     case lookup_variant(Name, Variants) of
@@ -1744,7 +1746,10 @@ lookup_variant(_Name, [], _Tag) ->
 coerce_tuple(O, N, TermTypes, Terms, Direction) ->
     case coerce_tuple_elements(TermTypes, Terms, Direction, []) of
         {ok, Converted} ->
-            {ok, {tuple, list_to_tuple(Converted)}};
+            case Direction of
+                to_fate -> {ok, {tuple, list_to_tuple(Converted)}};
+                from_fate -> {ok, list_to_tuple(Converted)}
+            end;
         {error, too_few_terms} ->
             {error, {tuple_too_few_terms, O, N, TermTypes, Terms}};
         {error, too_many_terms} ->
